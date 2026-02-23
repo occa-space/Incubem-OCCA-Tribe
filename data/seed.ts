@@ -30,7 +30,7 @@ export const REAL_USERS: User[] = [
 ];
 
 export const INITIAL_BUILDINGS: BuildingData[] = [
-  { id: 'b_tribal_center', ownerId: 'u_senior', squadId: 'sq_board', type: BuildingType.TRIBAL_CENTER, level: 1, position: { x: 8, z: 8 }, isPlaced: true, tasks: [] },
+  { id: 'b_tribal_center', ownerId: 'u_senior', squadId: 'sq_board', type: BuildingType.TRIBAL_CENTER, level: 1, position: { x: 10, z: 10 }, isPlaced: true, tasks: [] },
   { id: 'b_osc_hq', ownerId: 'u_senior', squadId: 'sq_osc', type: BuildingType.SQUAD_HQ, level: 1, position: { x: 4, z: 4 }, isPlaced: true, tasks: [] },
   { id: 'b_academy_hq', ownerId: 'u_senior', squadId: 'sq_academy', type: BuildingType.SQUAD_HQ, level: 1, position: { x: 16, z: 4 }, isPlaced: true, tasks: [] },
   { id: 'b_madein_hq', ownerId: 'u_senior', squadId: 'sq_occasulo', type: BuildingType.SQUAD_HQ, level: 1, position: { x: 4, z: 16 }, isPlaced: true, tasks: [] },

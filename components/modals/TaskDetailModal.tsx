@@ -141,8 +141,11 @@ export default function TaskDetailModal({
                     value={editingTask.task.size}
                     onChange={(e) => handleTaskFieldUpdate({ size: Number(e.target.value) as TaskSize })}
                   >
-                    {FIBONACCI_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {FIBONACCI_SIZES.filter((s) => s < 34).map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
                   </select>
+                  <p className="text-[10px] text-slate-500 mt-2">Regra: tarefas 34+ devem ser quebradas em menores.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Complexidade</label>

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GRID_SIZE, TILE_SIZE, GameState, BuildingType, GridPosition } from '../types';
 import { createProceduralBuilding } from '../services/buildingGenerator';
@@ -170,6 +170,7 @@ interface GameSceneProps {
 
 const GameScene: React.FC<GameSceneProps> = ({ gameState, zoomLevel, onTileClick, onBuildingClick }) => {
   const mountRef = useRef<HTMLDivElement>(null);
+  const [sceneReady, setSceneReady] = useState(false);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const buildingsGroupRef = useRef<THREE.Group | null>(null);
   const labelsGroupRef = useRef<THREE.Group | null>(null);
@@ -190,6 +191,8 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, zoomLevel, onTileClick
   const timeRef = useRef<number>(0);
 
   const panOffset = useRef({ x: 0, z: 0 });
+  const hasAutoCenteredRef = useRef(false);
+  const PAN_LIMIT = GRID_SIZE * TILE_SIZE;
   const isDragging = useRef(false);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
   const dragDistance = useRef(0);
@@ -312,6 +315,7 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, zoomLevel, onTileClick
     const vegetationGroup = new THREE.Group();
     scene.add(vegetationGroup);
     vegetationGroupRef.current = vegetationGroup;
+    setSceneReady(true);
 
     const animate = () => {
       reqAnimRef.current = requestAnimationFrame(animate);
@@ -438,6 +442,7 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, zoomLevel, onTileClick
         rendererRef.current.domElement.remove();
         rendererRef.current = null;
       }
+      setSceneReady(false);
       scene.clear();
       sceneRef.current = null;
     };
@@ -451,6 +456,43 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, zoomLevel, onTileClick
   }, [zoomLevel]);
 
   useEffect(() => {
+    if (!sceneReady) return;
+    if (!gameState.selectedBuildingId) return;
+    const selected = gameState.buildings.find((b) => b.id === gameState.selectedBuildingId);
+    if (!selected) return;
+
+    const sizeInTiles = getBuildingSize(selected.level, selected.type);
+    const offset = (sizeInTiles * TILE_SIZE) / 2;
+    const wx = (selected.position.x - GRID_SIZE / 2) * TILE_SIZE + offset;
+    const wz = (selected.position.z - GRID_SIZE / 2) * TILE_SIZE + offset;
+    panOffset.current.x = wx;
+    panOffset.current.z = wz;
+  }, [sceneReady, gameState.selectedBuildingId, gameState.buildings]);
+
+  useEffect(() => {
+    if (!sceneReady) return;
+    if (hasAutoCenteredRef.current) return;
+    if (!gameState.currentUser || gameState.buildings.length === 0) return;
+
+    const myBase = gameState.buildings.find(
+      (b) => b.type === BuildingType.RESIDENTIAL && b.ownerId === gameState.currentUser?.id
+    );
+    const tribalCenter = gameState.buildings.find((b) => b.type === BuildingType.TRIBAL_CENTER);
+    const target = myBase || tribalCenter || gameState.buildings[0];
+    if (!target) return;
+
+    const sizeInTiles = getBuildingSize(target.level, target.type);
+    const offset = (sizeInTiles * TILE_SIZE) / 2;
+    const wx = (target.position.x - GRID_SIZE / 2) * TILE_SIZE + offset;
+    const wz = (target.position.z - GRID_SIZE / 2) * TILE_SIZE + offset;
+
+    panOffset.current.x = wx;
+    panOffset.current.z = wz;
+    hasAutoCenteredRef.current = true;
+  }, [sceneReady, gameState.currentUser, gameState.buildings]);
+
+  useEffect(() => {
+    if (!sceneReady) return;
     if (!buildingsGroupRef.current || !labelsGroupRef.current || !vegetationGroupRef.current) return;
 
     const currentIds = new Set(gameState.buildings.map((b) => b.id));
@@ -581,7 +623,7 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, zoomLevel, onTileClick
         }
       }
     }
-  }, [gameState.buildings, gameState.users, gameState.currentUser, gameState.squads]);
+  }, [sceneReady, gameState.buildings, gameState.users, gameState.currentUser, gameState.squads]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     isDragging.current = false;
@@ -618,8 +660,8 @@ const GameScene: React.FC<GameSceneProps> = ({ gameState, zoomLevel, onTileClick
         const speed = 0.05 / zoomLevel;
         const deltaX = (dx + dy) * speed * -1;
         const deltaZ = (dy - dx) * speed * -1;
-        panOffset.current.x += deltaX;
-        panOffset.current.z += deltaZ;
+        panOffset.current.x = Math.max(-PAN_LIMIT, Math.min(PAN_LIMIT, panOffset.current.x + deltaX));
+        panOffset.current.z = Math.max(-PAN_LIMIT, Math.min(PAN_LIMIT, panOffset.current.z + deltaZ));
         dragStart.current = { x: e.clientX, y: e.clientY };
       }
     }

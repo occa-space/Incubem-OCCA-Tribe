@@ -2,6 +2,10 @@ import { Dispatch, SetStateAction } from 'react';
 import { BuildingData, BuildingType, GameState, GridPosition, Squad } from '../../types';
 import { BUILD_COSTS, getBuildingSize, getUpgradeCost } from '../../constants';
 import { isAreaOccupied as isAreaOccupiedFn } from './area';
+import { createBuilding, deleteBuilding as deleteBuildingRemote, updateBuilding as updateBuildingRemote } from '../supabase/repositories/buildings';
+import { createSquad, updateSquad as updateSquadRemote } from '../supabase/repositories/squads';
+import { upsertResources } from '../supabase/repositories/resources';
+import { updateProfile } from '../supabase/repositories/profiles';
 
 interface BuildingActionsParams {
   gameState: GameState;
@@ -42,6 +46,7 @@ export const createBuildingActions = ({
   showToast,
   setActiveTab
 }: BuildingActionsParams) => {
+  let placementLock = false;
   const isAreaOccupied = (startPos: GridPosition, size: number, excludeBuildingId?: string) =>
     isAreaOccupiedFn(gameState.buildings, startPos, size, excludeBuildingId);
 
@@ -65,6 +70,9 @@ export const createBuildingActions = ({
         buildings: prev.buildings.map((b) => (b.id === moveModeId ? { ...b, position: pos } : b)),
         selectedBuildingId: null
       }));
+      void updateBuildingRemote(moveModeId, { position: pos }).catch(() => {
+        showToast('Erro ao salvar posição da construção.', 'error');
+      });
       setMoveModeId(null);
       showToast('Construção movida com sucesso!', 'success');
       return;
@@ -72,74 +80,87 @@ export const createBuildingActions = ({
 
     // BUILD MODE
     if (buildMode) {
-      const myHouse = gameState.buildings.find(
-        (b) => b.type === BuildingType.RESIDENTIAL && b.ownerId === gameState.currentUser?.id
-      );
-      const isFirstHouse = buildMode === BuildingType.RESIDENTIAL && !myHouse;
-      const cost = isFirstHouse || isMaster ? { coins: 0 } : BUILD_COSTS[buildMode];
+      if (placementLock) return;
+      placementLock = true;
+      try {
+        const myHouse = gameState.buildings.find(
+          (b) => b.type === BuildingType.RESIDENTIAL && b.ownerId === gameState.currentUser?.id
+        );
+        const isFirstHouse = buildMode === BuildingType.RESIDENTIAL && !myHouse;
+        const cost = isFirstHouse || isMaster ? { coins: 0 } : BUILD_COSTS[buildMode];
 
-      if (buildMode === BuildingType.RESIDENTIAL && myHouse && !isFirstHouse && !isMaster) {
-        showToast('Você só pode ter uma Casa (HQ)!', 'error');
-        setBuildMode(null);
-        return;
-      }
-
-      if (buildMode === BuildingType.SQUAD_HQ) {
-        if (isAreaOccupied(pos, 2)) {
-          showToast('Espaço ocupado!', 'error');
-          return;
-        }
-        const isFree = gameState.currentUser.squadId === 'temp_pending';
-        if (!isFree && !isMaster && gameState.resources.coins < cost.coins) {
-          showToast('Moedas insuficientes!', 'error');
-          return;
-        }
-        setPendingSquadPosition(pos);
-        setBuildMode(null);
-        return;
-      }
-
-      const squadId = targetBuildSquadId || gameState.currentUser.squadId;
-
-      // Check if squad already has this organizational building type
-      if (buildMode !== BuildingType.RESIDENTIAL && buildMode !== BuildingType.DECORATION) {
-        const existingBuilding = gameState.buildings.find((b) => b.type === buildMode && b.squadId === squadId);
-        if (existingBuilding && !isMaster) {
-          showToast('Sua Squad já possui esta construção! Apenas uma por tipo é permitida.', 'error');
+        if (buildMode === BuildingType.RESIDENTIAL && myHouse && !isFirstHouse && !isMaster) {
+          showToast('Você só pode ter uma Casa (HQ)!', 'error');
           setBuildMode(null);
           return;
         }
-      }
 
-      if (gameState.resources.coins >= cost.coins) {
-        if (isAreaOccupied(pos, 1)) {
-          showToast('Espaço ocupado!', 'error');
+        if (buildMode === BuildingType.SQUAD_HQ) {
+          if (isAreaOccupied(pos, 2)) {
+            showToast('Espaço ocupado!', 'error');
+            return;
+          }
+          const isFree = gameState.currentUser.squadId === 'temp_pending';
+          if (!isFree && !isMaster && gameState.resources.coins < cost.coins) {
+            showToast('Moedas insuficientes!', 'error');
+            return;
+          }
+          setPendingSquadPosition(pos);
+          setBuildMode(null);
           return;
         }
 
-        const newBuilding: BuildingData = {
-          id: Math.random().toString(36).substr(2, 9),
-          ownerId: gameState.currentUser.id,
-          type: buildMode,
-          level: 1,
-          position: pos,
-          isPlaced: true,
-          lastCollected: Date.now(),
-          tasks: [],
-          squadId
-        };
-        setGameState((prev) => ({
-          ...prev,
-          resources: { coins: prev.resources.coins - cost.coins },
-          buildings: [...prev.buildings, newBuilding],
-          selectedBuildingId: null
-        }));
-        setBuildMode(null);
-        setTargetBuildSquadId(null);
-        showToast('Construção realizada com sucesso!', 'success');
-      } else {
-        showToast('Moedas insuficientes!', 'error');
-        setBuildMode(null);
+        const squadId = targetBuildSquadId || gameState.currentUser.squadId;
+
+        // Check if squad already has this organizational building type
+        if (buildMode !== BuildingType.RESIDENTIAL && buildMode !== BuildingType.DECORATION) {
+          const existingBuilding = gameState.buildings.find((b) => b.type === buildMode && b.squadId === squadId);
+          if (existingBuilding && !isMaster) {
+            showToast('Sua Squad já possui esta construção! Apenas uma por tipo é permitida.', 'error');
+            setBuildMode(null);
+            return;
+          }
+        }
+
+        if (gameState.resources.coins >= cost.coins) {
+          if (isAreaOccupied(pos, 1)) {
+            showToast('Espaço ocupado!', 'error');
+            return;
+          }
+
+          const newBuilding: BuildingData = {
+            id: crypto.randomUUID(),
+            ownerId: gameState.currentUser.id,
+            type: buildMode,
+            level: 1,
+            position: pos,
+            isPlaced: true,
+            lastCollected: Date.now(),
+            tasks: [],
+            squadId
+          };
+          const nextCoins = gameState.resources.coins - cost.coins;
+          setGameState((prev) => ({
+            ...prev,
+            resources: { coins: nextCoins },
+            buildings: [...prev.buildings, newBuilding],
+            selectedBuildingId: null
+          }));
+          void createBuilding(newBuilding).catch(() => {
+            showToast('Erro ao salvar construção.', 'error');
+          });
+          void upsertResources(gameState.currentUser.id, { coins: nextCoins }).catch(() => {
+            showToast('Erro ao salvar moedas.', 'error');
+          });
+          setBuildMode(null);
+          setTargetBuildSquadId(null);
+          showToast('Construção realizada com sucesso!', 'success');
+        } else {
+          showToast('Moedas insuficientes!', 'error');
+          setBuildMode(null);
+        }
+      } finally {
+        placementLock = false;
       }
     } else {
       setGameState((prev) => ({ ...prev, selectedBuildingId: null }));
@@ -154,7 +175,7 @@ export const createBuildingActions = ({
 
     if (gameState.resources.coins < cost) return;
 
-    const newSquadId = 'sq_' + Date.now();
+    const newSquadId = crypto.randomUUID();
     const newSquad: Squad = {
       id: newSquadId,
       name: newSquadName,
@@ -162,7 +183,7 @@ export const createBuildingActions = ({
     };
 
     const newBuilding: BuildingData = {
-      id: 'b_' + Math.random().toString(36).substr(2, 9),
+      id: crypto.randomUUID(),
       ownerId: gameState.currentUser.id,
       type: BuildingType.SQUAD_HQ,
       level: 1,
@@ -173,18 +194,34 @@ export const createBuildingActions = ({
       squadId: newSquadId
     };
 
+    const nextCoins = gameState.resources.coins - cost;
     setGameState((prev) => {
       const updatedUser = isOnboarding ? { ...prev.currentUser!, squadId: newSquadId } : prev.currentUser!;
 
       return {
         ...prev,
         currentUser: updatedUser,
-        resources: { coins: prev.resources.coins - cost },
+        resources: { coins: nextCoins },
         buildings: [...prev.buildings, newBuilding],
         squads: [...prev.squads, newSquad],
         selectedBuildingId: null
       };
     });
+
+    void createSquad(newSquad).catch(() => {
+      showToast('Erro ao salvar nova squad.', 'error');
+    });
+    void createBuilding(newBuilding).catch(() => {
+      showToast('Erro ao salvar construção da squad.', 'error');
+    });
+    void upsertResources(gameState.currentUser.id, { coins: nextCoins }).catch(() => {
+      showToast('Erro ao salvar moedas.', 'error');
+    });
+    if (isOnboarding) {
+      void updateProfile(gameState.currentUser.id, { squadId: newSquadId }).catch(() => {
+        showToast('Erro ao atualizar seu perfil.', 'error');
+      });
+    }
 
     setPendingSquadPosition(null);
     setNewSquadName('');
@@ -201,6 +238,9 @@ export const createBuildingActions = ({
       ...prev,
       squads: prev.squads.map((s) => (s.id === squadId ? { ...s, ...updates } : s))
     }));
+    void updateSquadRemote(squadId, updates).catch(() => {
+      showToast('Erro ao salvar squad.', 'error');
+    });
   };
 
   const updateBuilding = (id: string, updates: Partial<BuildingData>) => {
@@ -208,6 +248,9 @@ export const createBuildingActions = ({
       ...prev,
       buildings: prev.buildings.map((b) => (b.id === id ? { ...b, ...updates } : b))
     }));
+    void updateBuildingRemote(id, updates).catch(() => {
+      showToast('Erro ao salvar construção.', 'error');
+    });
   };
 
   const handleBuildingClick = (id: string) => {
@@ -230,13 +273,22 @@ export const createBuildingActions = ({
     }
     const cost = getUpgradeCost(b.level, b.type);
     if (gameState.resources.coins >= cost.coins || isMaster) {
+      const nextCoins = isMaster ? gameState.resources.coins : gameState.resources.coins - cost.coins;
       setGameState((prev) => ({
         ...prev,
-        resources: { coins: prev.resources.coins - (isMaster ? 0 : cost.coins) },
+        resources: { coins: nextCoins },
         buildings: prev.buildings.map((building) =>
           building.id === b.id ? { ...building, level: building.level + 1 } : building
         )
       }));
+      void updateBuildingRemote(b.id, { level: b.level + 1 }).catch(() => {
+        showToast('Erro ao salvar melhoria.', 'error');
+      });
+      if (!isMaster) {
+        void upsertResources(gameState.currentUser!.id, { coins: nextCoins }).catch(() => {
+          showToast('Erro ao salvar moedas.', 'error');
+        });
+      }
       showToast('Construção evoluída!', 'success');
     } else {
       showToast('Moedas insuficientes!', 'error');
@@ -254,12 +306,19 @@ export const createBuildingActions = ({
     }
     if (!window.confirm('Tem certeza? Você receberá 50% das moedas investidas.')) return;
     const baseCost = BUILD_COSTS[b.type];
+    const nextCoins = gameState.resources.coins + Math.floor(baseCost.coins * 0.5);
     setGameState((prev) => ({
       ...prev,
-      resources: { coins: prev.resources.coins + Math.floor(baseCost.coins * 0.5) },
+      resources: { coins: nextCoins },
       buildings: prev.buildings.filter((build) => build.id !== b.id),
       selectedBuildingId: null
     }));
+    void deleteBuildingRemote(b.id).catch(() => {
+      showToast('Erro ao remover construção.', 'error');
+    });
+    void upsertResources(gameState.currentUser!.id, { coins: nextCoins }).catch(() => {
+      showToast('Erro ao salvar moedas.', 'error');
+    });
     showToast('Construção demolida.', 'info');
   };
 

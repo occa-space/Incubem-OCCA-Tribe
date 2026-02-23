@@ -12,7 +12,8 @@ import {
   TrendingUp,
   Users,
   Box,
-  Crown
+  Crown,
+  MessageSquare
 } from 'lucide-react';
 import { BuildingData, BuildingType, GameState, KanbanTask } from '../../types';
 import { BUILDING_METADATA, getUpgradeCost } from '../../constants';
@@ -341,6 +342,135 @@ export default function OverviewTab({
               </div>
             </div>
           </div>
+
+          {selectedBuilding.type === BuildingType.RESIDENTIAL && (
+            <div className="bg-slate-800 p-5 rounded-xl border border-slate-700">
+              <h3 className="font-bold text-white mb-3 flex items-center gap-2">
+                <MessageSquare size={16} className="text-emerald-400" /> Feedbacks Recebidos
+              </h3>
+              {(() => {
+                const received = (gameState.feedbacks || [])
+                  .filter((f) => f.targetUserId === selectedBuilding.ownerId)
+                  .sort((a, b) => b.timestamp - a.timestamp);
+
+                if (received.length === 0) {
+                  return <p className="text-sm text-slate-500">Nenhum feedback recebido ainda.</p>;
+                }
+
+                return (
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {received.map((f) => {
+                      const author = gameState.users.find((u) => u.id === f.sourceUserId);
+                      return (
+                        <div key={f.id} className="bg-slate-900/60 border border-slate-700 rounded-lg p-3">
+                          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
+                            <span>
+                              De: <span className="text-slate-200 font-semibold">{author?.name || 'Usuário'}</span>
+                            </span>
+                            <span>Sprint {f.sprint}</span>
+                          </div>
+                          {f.q_comm && (
+                            <p className="text-sm text-slate-200">
+                              <span className="text-slate-400">Comunicação:</span> {f.q_comm}
+                            </p>
+                          )}
+                          {f.q_impact && (
+                            <p className="text-sm text-slate-200">
+                              <span className="text-slate-400">Impacto:</span> {f.q_impact}
+                            </p>
+                          )}
+                          {!f.q_comm && !f.q_impact && (
+                            <p className="text-sm text-slate-300">Feedback registrado.</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {selectedBuilding.type === BuildingType.SQUAD_HQ && (
+            <div className="bg-slate-800 p-5 rounded-xl border border-slate-700">
+              <h3 className="font-bold text-white mb-3 flex items-center gap-2">
+                <Users size={16} className="text-indigo-400" /> Ranking da Squad (Participantes)
+              </h3>
+              <div className="bg-slate-900/50 rounded-lg overflow-hidden border border-slate-700">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-slate-900 text-slate-400 text-xs uppercase">
+                    <tr>
+                      <th className="p-2">Participante</th>
+                      <th className="p-2 text-right">XP</th>
+                      <th className="p-2 text-right">PA</th>
+                      <th className="p-2 text-right">AIM</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {(() => {
+                      const squadMembers = gameState.users.filter((u) => u.squadId === selectedBuilding.squadId);
+                      const ranking = squadMembers.map((member) => {
+                        let totalPA = 0;
+                        let totalXP = 0;
+                        let aimSum = 0;
+                        let aimCount = 0;
+
+                        displayTasks.forEach((t) => {
+                          const participants = t.participants && t.participants.length > 0 ? t.participants : [t.creatorId];
+                          const participates = participants.includes(member.id);
+
+                          if (t.status === 'DONE' && participates) {
+                            if (t.ruleValue === 'NEGOTIATED') {
+                              const aimMultiplier = t.aim === 0 ? 0 : t.aim === 2 ? 1.5 : t.aim === 3 ? 2.0 : 1.0;
+                              const basePA = t.customPaDistribution?.[member.id] || 0;
+                              const finalPA = Math.floor(basePA * aimMultiplier);
+                              totalPA += finalPA;
+                              totalXP += finalPA * 10;
+                            } else {
+                              totalPA += t.finalPA || 0;
+                              totalXP += t.finalXP || 0;
+                            }
+
+                            if (t.aim !== undefined) {
+                              aimSum += t.aim;
+                              aimCount++;
+                            }
+                          }
+
+                          (t.history || []).forEach((h) => {
+                            if (h.participants.includes(member.id)) {
+                              totalPA += h.coins || 0;
+                              totalXP += h.xp || 0;
+                              aimSum += h.aim || 0;
+                              aimCount++;
+                            }
+                          });
+                        });
+
+                        const avgAim = aimCount > 0 ? aimSum / aimCount : 0;
+                        return { member, totalXP, totalPA, avgAim };
+                      });
+
+                      return ranking
+                        .sort((a, b) => b.totalXP - a.totalXP)
+                        .slice(0, 10)
+                        .map(({ member, totalXP, totalPA, avgAim }, idx) => (
+                          <tr key={member.id} className="hover:bg-slate-800/50">
+                            <td className="p-2 flex items-center gap-2">
+                              <span className={`text-[10px] w-4 h-4 rounded-full flex items-center justify-center ${idx === 0 ? 'bg-yellow-500 text-black' : 'bg-slate-700 text-slate-400'}`}>{idx + 1}</span>
+                              <span className="font-bold text-slate-200 truncate max-w-[150px]">{member.name}</span>
+                            </td>
+                            <td className="p-2 text-right font-mono text-cyan-300">{totalXP.toLocaleString()}</td>
+                            <td className="p-2 text-right font-mono text-green-400">{totalPA.toLocaleString()}</td>
+                            <td className="p-2 text-right font-mono text-purple-400">{avgAim.toFixed(1)}</td>
+                          </tr>
+                        ));
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {(isOwner || isMaster) && (
             <div className="bg-slate-800/30 p-6 rounded-2xl border border-slate-700/50">

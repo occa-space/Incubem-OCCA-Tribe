@@ -293,6 +293,8 @@ export interface GameState {
   dailies?: DailyEntry[];
   feedbacks?: FeedbackEntry[];
   academyTracks?: LearningTrack[]; // Global list of tracks
+  marketItems?: MarketItem[];
+  purchases?: PurchaseRecord[];
 }
 
 export const GRID_SIZE = 20;

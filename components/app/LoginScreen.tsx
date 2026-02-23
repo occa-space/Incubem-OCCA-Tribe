@@ -2,19 +2,31 @@ import React from 'react';
 import { Box, LogIn } from 'lucide-react';
 
 interface LoginScreenProps {
-  loginName: string;
-  loginCpf: string;
+  mode: 'SIGN_IN' | 'SIGN_UP';
+  name: string;
+  email: string;
+  password: string;
   onNameChange: (value: string) => void;
-  onCpfChange: (value: string) => void;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
   onSubmit: (e: React.FormEvent) => void;
+  onToggleMode: () => void;
+  isLoading?: boolean;
+  errorMessage?: string | null;
 }
 
 export default function LoginScreen({
-  loginName,
-  loginCpf,
+  mode,
+  name,
+  email,
+  password,
   onNameChange,
-  onCpfChange,
-  onSubmit
+  onEmailChange,
+  onPasswordChange,
+  onSubmit,
+  onToggleMode,
+  isLoading,
+  errorMessage
 }: LoginScreenProps) {
   return (
     <div className="w-full h-screen bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
@@ -31,28 +43,44 @@ export default function LoginScreen({
         <h1 className="text-3xl font-bold text-white text-center mb-2 pixel-font">Incubem Tycoon</h1>
 
         <form onSubmit={onSubmit} className="space-y-4 mt-8 animate-in fade-in slide-in-from-bottom-4">
+          {mode === 'SIGN_UP' && (
+            <div>
+              <label className="text-xs uppercase font-bold text-slate-400">Nome</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => onNameChange(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                placeholder="Ex: Ana"
+              />
+            </div>
+          )}
           <div>
-            <label className="text-xs uppercase font-bold text-slate-400">Nome (Primeiro Nome)</label>
+            <label className="text-xs uppercase font-bold text-slate-400">Email</label>
             <input
-              type="text"
-              value={loginName}
-              onChange={(e) => onNameChange(e.target.value)}
+              type="email"
+              value={email}
+              onChange={(e) => onEmailChange(e.target.value)}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
-              placeholder="Ex: Ana"
+              placeholder="voce@exemplo.com"
             />
           </div>
           <div>
-            <label className="text-xs uppercase font-bold text-slate-400">CPF (Senha)</label>
+            <label className="text-xs uppercase font-bold text-slate-400">Senha</label>
             <input
-              type="text"
-              value={loginCpf}
-              onChange={(e) => onCpfChange(e.target.value)}
+              type="password"
+              value={password}
+              onChange={(e) => onPasswordChange(e.target.value)}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
-              placeholder="000.000.000-00"
+              placeholder="********"
             />
           </div>
-          <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 mt-2">
-            <LogIn size={20} /> ENTRAR
+          {errorMessage && <div className="text-xs text-red-400">{errorMessage}</div>}
+          <button type="submit" disabled={isLoading} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 mt-2">
+            <LogIn size={20} /> {mode === 'SIGN_UP' ? 'CRIAR CONTA' : 'ENTRAR'}
+          </button>
+          <button type="button" onClick={onToggleMode} className="w-full text-xs text-indigo-300 hover:text-indigo-200">
+            {mode === 'SIGN_UP' ? 'Já tenho conta' : 'Quero criar conta'}
           </button>
         </form>
       </div>

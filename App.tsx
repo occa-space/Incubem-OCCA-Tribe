@@ -1,13 +1,12 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import GameScene from './components/GameScene';
-import { GameState, BuildingType, GridPosition } from './types';
+import { GameState, BuildingType, GridPosition, MarketItem, PurchaseRecord } from './types';
 import { BUILDING_METADATA } from './constants';
 import MentorContainer from './components/mentor/MentorContainer';
 import AcademyContainer from './components/academy/AcademyContainer';
 import MarketContainer from './components/market/MarketContainer';
 import WarehouseView from './components/base/WarehouseView';
-import { INITIAL_BUILDINGS, INITIAL_RESOURCES, REAL_SQUADS, REAL_USERS } from './data/seed';
 import LoginScreen from './components/app/LoginScreen';
 import ToastNotification from './components/overlays/ToastNotification';
 import RenewalPromptModal, { RenewalPromptData } from './components/modals/RenewalPromptModal';
@@ -34,19 +33,34 @@ import FloatingMenu from './components/app/FloatingMenu';
 import { getTaskStats } from './services/stats/taskStats';
 import { getSquadStats } from './services/stats/squadStats';
 import { useToast } from './hooks/useToast';
-import { createLoginActions } from './services/auth/loginActions';
 import { getSelectedBuildingMeta } from './services/buildings/selection';
 import { useTaskModal } from './hooks/useTaskModal';
+import { useSupabaseSession } from './hooks/useSupabaseSession';
+import { loadGameState } from './services/supabase/gameState';
+import { supabase } from './services/supabase/client';
+import { ensureInitialData } from './services/supabase/bootstrap';
+import { subscribeToGameData } from './services/supabase/realtime';
+import { updateProfile } from './services/supabase/repositories/profiles';
+import { updateAppState } from './services/supabase/repositories/appState';
+import { insertPurchase, upsertMarketItem } from './services/supabase/repositories/market';
+import { upsertResources } from './services/supabase/repositories/resources';
+import { upsertDaily } from './services/supabase/repositories/dailies';
+import { upsertFeedback } from './services/supabase/repositories/feedbacks';
+import { upsertLearningTrack } from './services/supabase/repositories/academy';
 
 export default function App() {
-  // Login State
-  const [loginName, setLoginName] = useState('');
-  const [loginCpf, setLoginCpf] = useState('');
+  const [authMode, setAuthMode] = useState<'SIGN_IN' | 'SIGN_UP'>('SIGN_IN');
+  const [authName, setAuthName] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const { session, loading: authLoading } = useSupabaseSession();
   
   const [gameState, setGameState] = useState<GameState>({
     currentUser: null,
-    users: REAL_USERS,
-    squads: REAL_SQUADS, 
+    users: [],
+    squads: [], 
     player: {
       level: 1,
       currentXP: 0,
@@ -55,12 +69,15 @@ export default function App() {
       reputation: 3.0,
       streak: 0
     },
-    resources: INITIAL_RESOURCES,
-    buildings: INITIAL_BUILDINGS,
+    resources: { coins: 0 },
+    buildings: [],
     selectedBuildingId: null,
     sprintCycle: 1,
     sprintStartDate: Date.now()
   });
+
+  const [isGameLoading, setIsGameLoading] = useState(false);
+  const refreshTimerRef = useRef<number | null>(null);
   
   const [buildMode, setBuildMode] = useState<BuildingType | null>(null);
   const [targetBuildSquadId, setTargetBuildSquadId] = useState<string | null>(null); 
@@ -113,13 +130,188 @@ export default function App() {
     }
   }, [gameState.currentUser, gameState.buildings, buildMode, pendingSquadPosition, isMaster]);
 
-  // --- LOGIN FLOW ---
-  const loginActions = createLoginActions({
-    loginName,
-    loginCpf,
-    setGameState,
-    showToast
-  });
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setAuthError('Preencha email e senha.');
+      return;
+    }
+
+    if (authMode === 'SIGN_UP' && !authName.trim()) {
+      setAuthError('Informe seu nome.');
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    try {
+      if (authMode === 'SIGN_IN') {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword
+        });
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+          options: {
+            data: { name: authName.trim() }
+          }
+        });
+        if (error) throw error;
+        if (!data.session) {
+          showToast('Conta criada. Verifique seu email para confirmar o acesso.', 'info');
+        }
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Falha na autenticação.');
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  useEffect(() => {
+    let ignore = false;
+    if (!session?.user?.id) return;
+
+    setIsGameLoading(true);
+    loadGameState(session.user.id)
+      .then(async (loaded) => {
+        if (ignore) return;
+        setGameState(loaded);
+        const changed = await ensureInitialData(session.user.id, loaded.currentUser?.role === 'Master');
+        if (changed) {
+          const refreshed = await loadGameState(session.user.id);
+          if (!ignore) setGameState(refreshed);
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        showToast('Erro ao carregar dados do Supabase.', 'error');
+      })
+      .finally(() => {
+        if (!ignore) setIsGameLoading(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [session?.user?.id, showToast]);
+
+  useEffect(() => {
+    if (!session?.user?.id || !gameState.currentUser) return;
+
+    const scheduleRefresh = () => {
+      if (refreshTimerRef.current) return;
+      refreshTimerRef.current = window.setTimeout(async () => {
+        refreshTimerRef.current = null;
+        try {
+          const refreshed = await loadGameState(session.user.id);
+          setGameState(refreshed);
+        } catch (err) {
+          console.error(err);
+        }
+      }, 400);
+    };
+
+    const channel = subscribeToGameData({
+      squadId: gameState.currentUser.squadId,
+      isMaster: gameState.currentUser.role === 'Master',
+      onChange: scheduleRefresh
+    });
+
+    return () => {
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      supabase.removeChannel(channel);
+    };
+  }, [session?.user?.id, gameState.currentUser?.squadId, gameState.currentUser?.role]);
+
+  useEffect(() => {
+    if (!gameState.currentUser) return;
+    if (gameState.currentUser.role !== 'Master') return;
+
+    const checkSprint = async () => {
+      const elapsedDays = Math.floor((Date.now() - gameState.sprintStartDate) / (1000 * 60 * 60 * 24));
+      if (elapsedDays < SPRINT_DURATION_DAYS) return;
+
+      const cyclesPassed = Math.floor(elapsedDays / SPRINT_DURATION_DAYS);
+      const nextSprintCycle = gameState.sprintCycle + cyclesPassed;
+      const nextStartDate = gameState.sprintStartDate + cyclesPassed * SPRINT_DURATION_DAYS * 24 * 60 * 60 * 1000;
+
+      setGameState((prev) => ({
+        ...prev,
+        sprintCycle: nextSprintCycle,
+        sprintStartDate: nextStartDate
+      }));
+
+      try {
+        await updateAppState({
+          sprint_cycle: nextSprintCycle,
+          sprint_start_date: nextStartDate
+        });
+      } catch (err) {
+        console.error(err);
+        showToast('Erro ao atualizar sprint no Supabase.', 'error');
+      }
+    };
+
+    const interval = window.setInterval(checkSprint, 60 * 1000);
+    void checkSprint();
+
+    return () => window.clearInterval(interval);
+  }, [gameState.currentUser, gameState.sprintCycle, gameState.sprintStartDate, showToast]);
+
+  const startNewSprint = async () => {
+    if (!isMaster) return;
+    const nextSprintCycle = gameState.sprintCycle + 1;
+    const nextStartDate = Date.now();
+    setGameState((prev) => ({
+      ...prev,
+      sprintCycle: nextSprintCycle,
+      sprintStartDate: nextStartDate
+    }));
+    try {
+      await updateAppState({
+        sprint_cycle: nextSprintCycle,
+        sprint_start_date: nextStartDate
+      });
+      showToast('Novo sprint iniciado.', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao iniciar novo sprint.', 'error');
+    }
+  };
+
+  const resetSprint = async () => {
+    if (!isMaster) return;
+    if (!window.confirm('Resetar sprint para 0? Isso reinicia o ciclo para todos.')) return;
+    const nextSprintCycle = 0;
+    const nextStartDate = Date.now();
+    setGameState((prev) => ({
+      ...prev,
+      sprintCycle: nextSprintCycle,
+      sprintStartDate: nextStartDate
+    }));
+    try {
+      await updateAppState({
+        sprint_cycle: nextSprintCycle,
+        sprint_start_date: nextStartDate
+      });
+      showToast('Sprint resetado para 0.', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao resetar sprint.', 'error');
+    }
+  };
 
   const buildingActions = createBuildingActions({
     gameState,
@@ -190,16 +382,198 @@ export default function App() {
         currentXPInLevel: 0,
         nextLevelThreshold: 1000,
         xpProgress: 0
-      };
+  };
 
-  if (!gameState.currentUser) {
+  const handlePurchase = async (item: MarketItem) => {
+    if (!gameState.currentUser) return;
+    if (gameState.resources.coins < item.cost) {
+      showToast('Moedas insuficientes.', 'error');
+      return;
+    }
+    if (item.stock <= 0) {
+      showToast('Sem estoque disponível.', 'error');
+      return;
+    }
+
+    const purchase: PurchaseRecord = {
+      id: crypto.randomUUID(),
+      itemId: item.id,
+      userId: gameState.currentUser.id,
+      userName: gameState.currentUser.name,
+      itemName: item.name,
+      itemCost: item.cost,
+      timestamp: Date.now(),
+      status: 'PENDING'
+    };
+
+    const nextCoins = gameState.resources.coins - item.cost;
+    const nextStock = item.stock - 1;
+
+    setGameState((prev) => ({
+      ...prev,
+      resources: { coins: nextCoins },
+      marketItems: prev.marketItems?.map((i) => (i.id === item.id ? { ...i, stock: nextStock } : i)),
+      purchases: [...(prev.purchases || []), purchase]
+    }));
+
+    try {
+      await insertPurchase(purchase);
+      await upsertMarketItem({ ...item, stock: nextStock });
+      await upsertResources(gameState.currentUser.id, { coins: nextCoins });
+      showToast('Compra registrada.', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao registrar compra.', 'error');
+    }
+  };
+
+  const handleCreateDaily = async () => {
+    if (!gameState.currentUser) return;
+    const yesterday = window.prompt('Ontem, eu...') || '';
+    const today = window.prompt('Hoje, vou...') || '';
+    const blockers = window.prompt('Impedimentos?') || '';
+    if (!yesterday.trim() || !today.trim()) {
+      showToast('Daily precisa de ontem e hoje.', 'error');
+      return;
+    }
+
+    const entry = {
+      id: crypto.randomUUID(),
+      userId: gameState.currentUser.id,
+      squadId: gameState.currentUser.squadId,
+      memberName: gameState.currentUser.name,
+      role: gameState.currentUser.role || 'Executor',
+      date: new Date().toISOString().slice(0, 10),
+      yesterday,
+      today,
+      blockers,
+      timestamp: Date.now()
+    };
+
+    setGameState((prev) => ({
+      ...prev,
+      dailies: [...(prev.dailies || []), entry]
+    }));
+
+    try {
+      await upsertDaily(entry);
+      showToast('Daily registrada.', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao salvar daily.', 'error');
+    }
+  };
+
+  const handleCreateFeedback = async () => {
+    if (!gameState.currentUser) return;
+    const targetName = window.prompt('Para quem é o feedback? (nome)') || '';
+    const target = gameState.users.find((u) => u.name.toLowerCase() === targetName.trim().toLowerCase());
+    if (!target) {
+      showToast('Usuário não encontrado.', 'error');
+      return;
+    }
+    if (target.id === gameState.currentUser.id) {
+      showToast('Você não pode enviar feedback para si mesmo.', 'error');
+      return;
+    }
+    const qComm = window.prompt('Feedback comunicação:') || '';
+    const qImpact = window.prompt('Impacto percebido:') || '';
+
+    const existingEntry = (gameState.feedbacks || []).find(
+      (f) =>
+        f.sourceUserId === gameState.currentUser!.id &&
+        f.targetUserId === target.id &&
+        f.sprint === gameState.sprintCycle
+    );
+
+    const entry = {
+      id: existingEntry?.id || crypto.randomUUID(),
+      squadId: gameState.currentUser.squadId,
+      sourceUserId: gameState.currentUser.id,
+      targetUserId: target.id,
+      sprint: gameState.sprintCycle,
+      relationship: 'MENTOR_TO_EXECUTOR' as const,
+      q_comm: qComm || undefined,
+      q_impact: qImpact || undefined,
+      timestamp: Date.now()
+    };
+
+    setGameState((prev) => ({
+      ...prev,
+      feedbacks: existingEntry
+        ? (prev.feedbacks || []).map((f) => (f.id === existingEntry.id ? entry : f))
+        : [...(prev.feedbacks || []), entry]
+    }));
+
+    try {
+      await upsertFeedback(entry);
+      showToast(existingEntry ? 'Feedback atualizado.' : 'Feedback registrado.', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao salvar feedback.', 'error');
+    }
+  };
+
+  const handleCreateTrack = async () => {
+    if (!gameState.currentUser) return;
+    const title = window.prompt('Título da trilha:') || '';
+    const description = window.prompt('Descrição:') || '';
+    if (!title.trim()) {
+      showToast('Título obrigatório.', 'error');
+      return;
+    }
+    const track = {
+      id: crypto.randomUUID(),
+      gapId: 'gap_' + Date.now(),
+      title,
+      description: description || '',
+      urgency: 'MÉDIO' as const,
+      videos: [],
+      createdAt: Date.now(),
+      status: 'DRAFT' as const,
+      totalViews: 0,
+      completions: 0
+    };
+
+    setGameState((prev) => ({
+      ...prev,
+      academyTracks: [...(prev.academyTracks || []), track]
+    }));
+
+    try {
+      await upsertLearningTrack(track);
+      showToast('Trilha criada.', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao salvar trilha.', 'error');
+    }
+  };
+
+  if (authLoading || isGameLoading) {
+    return (
+      <div className="w-full h-screen flex items-center justify-center bg-slate-900 text-slate-200">
+        Carregando...
+      </div>
+    );
+  }
+
+  if (!session || !gameState.currentUser) {
     return (
       <LoginScreen
-        loginName={loginName}
-        loginCpf={loginCpf}
-        onNameChange={setLoginName}
-        onCpfChange={setLoginCpf}
-        onSubmit={loginActions.handleLoginSubmit}
+        mode={authMode}
+        name={authName}
+        email={authEmail}
+        password={authPassword}
+        onNameChange={setAuthName}
+        onEmailChange={setAuthEmail}
+        onPasswordChange={setAuthPassword}
+        onSubmit={handleAuthSubmit}
+        onToggleMode={() => {
+          setAuthMode((prev) => (prev === 'SIGN_IN' ? 'SIGN_UP' : 'SIGN_IN'));
+          setAuthError(null);
+        }}
+        isLoading={isAuthSubmitting}
+        errorMessage={authError}
       />
     );
   }
@@ -241,14 +615,26 @@ export default function App() {
         showProfileMenu={showProfileMenu}
         onToggleProfileMenu={() => setShowProfileMenu(!showProfileMenu)}
         onOpenSquadSelector={() => { setShowSquadSelectorModal(true); setShowProfileMenu(false); }}
-        onLogout={loginActions.handleLogout}
+        onStartNewSprint={isMaster ? startNewSprint : undefined}
+        onResetSprint={isMaster ? resetSprint : undefined}
+        onLogout={handleLogout}
       />
 
       <FloatingMenu
         visible={!selectedBuilding && !buildMode && !moveModeId}
         isMainMenuOpen={isMainMenuOpen}
+        isMaster={isMaster}
         onToggleMainMenu={() => setIsMainMenuOpen(!isMainMenuOpen)}
         onCreateTask={() => taskActions.handleOpenCreateTask(undefined)}
+        onCreateBase={() => {
+          setBuildMode(BuildingType.RESIDENTIAL);
+          setIsMainMenuOpen(false);
+          showToast('Modo de Construção de Base Ativo: Clique no mapa para iniciar.', 'info');
+        }}
+        onCreateProject={() => {
+          setShowBuildingSelectModal(true);
+          setIsMainMenuOpen(false);
+        }}
         onCreateSquad={() => { 
           setBuildMode(BuildingType.SQUAD_HQ); 
           setIsMainMenuOpen(false); 
@@ -262,6 +648,18 @@ export default function App() {
         <SquadSelectorModal
           squads={gameState.squads}
           currentUser={gameState.currentUser}
+          onSelectSquad={(squad) => {
+            setGameState((prev) => ({
+              ...prev,
+              currentUser: prev.currentUser ? { ...prev.currentUser, squadId: squad.id } : prev.currentUser,
+              users: prev.users.map((u) => (u.id === prev.currentUser?.id ? { ...u, squadId: squad.id } : u))
+            }));
+            setShowSquadSelectorModal(false);
+            void updateProfile(gameState.currentUser!.id, { squadId: squad.id }).catch(() => {
+              showToast('Erro ao atualizar sua squad.', 'error');
+            });
+            showToast(`Squad alterada para ${squad.name}.`, 'success');
+          }}
           onClose={() => setShowSquadSelectorModal(false)}
         />
       )}
@@ -330,26 +728,25 @@ export default function App() {
                     currentUser={gameState.currentUser!}
                     users={gameState.users}
                     squads={gameState.squads}
+                    feedbacks={gameState.feedbacks || []}
                     sprintCycle={gameState.sprintCycle}
+                    onCreateDaily={handleCreateDaily}
+                    onCreateFeedback={handleCreateFeedback}
                   />
               )}
               {activeTab === 'ACADEMY' && isTribalCenter && (
                    <AcademyContainer 
                         gameState={gameState}
                         currentUser={gameState.currentUser!}
+                        onCreateTrack={handleCreateTrack}
                    />
               )}
               {activeTab === 'MARKET' && isTribalCenter && (
                    <MarketContainer 
                         currentUser={gameState.currentUser!}
                         userCoins={gameState.resources.coins}
-                        onPurchaseSuccess={(cost) => {
-                            setGameState(prev => ({
-                                ...prev,
-                                resources: { coins: prev.resources.coins - cost }
-                            }));
-                            showToast("Compra realizada! Vá ao armazém na sua base.", "success");
-                        }}
+                        items={gameState.marketItems || []}
+                        onPurchase={handlePurchase}
                    />
               )}
               {activeTab === 'WAREHOUSE' && isMyHouse && (

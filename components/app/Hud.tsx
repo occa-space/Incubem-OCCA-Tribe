@@ -11,6 +11,8 @@ interface HudProps {
   showProfileMenu: boolean;
   onToggleProfileMenu: () => void;
   onOpenSquadSelector: () => void;
+  onStartNewSprint?: () => void;
+  onResetSprint?: () => void;
   onLogout: () => void;
 }
 
@@ -23,6 +25,8 @@ export default function Hud({
   showProfileMenu,
   onToggleProfileMenu,
   onOpenSquadSelector,
+  onStartNewSprint,
+  onResetSprint,
   onLogout
 }: HudProps) {
   return (
@@ -52,6 +56,22 @@ export default function Hud({
                 >
                   <RefreshCcw size={18} /> Trocar Squad
                 </button>
+                {onStartNewSprint && (
+                  <button
+                    onClick={onStartNewSprint}
+                    className="w-full text-left p-3 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm font-bold text-emerald-300"
+                  >
+                    <Clock size={18} /> Iniciar Novo Sprint
+                  </button>
+                )}
+                {onResetSprint && (
+                  <button
+                    onClick={onResetSprint}
+                    className="w-full text-left p-3 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm font-bold text-amber-300"
+                  >
+                    <RefreshCcw size={18} /> Resetar Sprint (0)
+                  </button>
+                )}
                 <div className="h-px bg-slate-700 my-1"></div>
                 <button onClick={onLogout} className="w-full text-left p-3 hover:bg-red-900/30 rounded-lg flex items-center gap-3 text-sm font-bold text-red-400">
                   <LogOut size={18} /> Sair

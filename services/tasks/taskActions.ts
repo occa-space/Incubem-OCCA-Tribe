@@ -1,6 +1,8 @@
 import { Dispatch, SetStateAction } from 'react';
 import { AIM_OPTIONS, BUILDING_PA_LIMITS, calculateNextLevelXP } from '../../constants';
 import { BuildingType, GameState, KanbanStatus, KanbanTask, TaskHistoryEntry } from '../../types';
+import { createTask, updateTask as updateTaskRemote } from '../supabase/repositories/tasks';
+import { supabase } from '../supabase/client';
 
 export interface TaskActionsParams {
   gameState: GameState;
@@ -31,6 +33,7 @@ export const createTaskActions = ({
   renewalPrompt,
   showToast
 }: TaskActionsParams) => {
+  const canGrade = gameState.currentUser?.role === 'Master' || gameState.currentUser?.role === 'Mentor Júnior';
   const handleOpenCreateTask = (preselectedBuildingId?: string) => {
     if (!gameState.currentUser) return;
 
@@ -79,7 +82,7 @@ export const createTaskActions = ({
 
     // Draft Task
     const draftTask: KanbanTask = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: crypto.randomUUID(),
       content: '',
       status: 'BACKLOG',
       createdAt: Date.now(),
@@ -110,6 +113,10 @@ export const createTaskActions = ({
       showToast('A tarefa precisa de um título/descrição.', 'error');
       return;
     }
+    if (editingTask.task.size >= 34) {
+      showToast('Tasks 34+ devem ser quebradas em menores.', 'error');
+      return;
+    }
     if (!editingTask.buildingId) {
       showToast('Selecione um projeto/construção para vincular esta tarefa.', 'error');
       return;
@@ -122,6 +129,9 @@ export const createTaskActions = ({
         b.id === editingTask.buildingId ? { ...b, tasks: [...b.tasks, editingTask.task] } : b
       )
     }));
+    void createTask(editingTask.buildingId, editingTask.task).catch(() => {
+      showToast('Erro ao salvar tarefa.', 'error');
+    });
 
     // Close
     setEditingTask(null);
@@ -132,6 +142,10 @@ export const createTaskActions = ({
   // Wrapper for updating draft OR global state
   const handleTaskFieldUpdate = (updates: Partial<KanbanTask>, newBuildingId?: string) => {
     if (!editingTask) return;
+    if (updates.size !== undefined && updates.size >= 34) {
+      showToast('Tasks 34+ devem ser quebradas em menores.', 'error');
+      return;
+    }
 
     if (isCreatingTask) {
       // Update draft state only
@@ -149,12 +163,19 @@ export const createTaskActions = ({
   };
 
   const updateTask = (buildingId: string, taskId: string, updates: Partial<KanbanTask>) => {
+    if (updates.status === 'DONE' && !canGrade) {
+      showToast('Apenas Mentor ou Master podem concluir tarefas.', 'error');
+      return;
+    }
     setGameState((prev) => ({
       ...prev,
       buildings: prev.buildings.map((b) =>
         b.id === buildingId ? { ...b, tasks: b.tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t)) } : b
       )
     }));
+    void updateTaskRemote(taskId, updates).catch(() => {
+      showToast('Erro ao atualizar tarefa.', 'error');
+    });
     // Sync local state if currently open (to avoid flickering)
     if (editingTask && editingTask.task.id === taskId && !isCreatingTask) {
       setEditingTask((prev) => (prev ? { ...prev, task: { ...prev.task, ...updates } } : null));
@@ -163,6 +184,10 @@ export const createTaskActions = ({
 
   const moveTask = (e: React.MouseEvent | null, task: KanbanTask, targetCol: KanbanStatus, buildingId: string) => {
     if (e) e.stopPropagation();
+    if (targetCol === 'DONE' && !canGrade) {
+      showToast('Apenas Mentor ou Master podem concluir tarefas.', 'error');
+      return;
+    }
     const currentSprintName = `Sprint ${gameState.sprintCycle}`;
     let newSprintHistory = task.sprintHistory || [];
     if (task.status === 'BACKLOG' && targetCol !== 'BACKLOG') {
@@ -219,6 +244,10 @@ export const createTaskActions = ({
 
   const confirmGrading = () => {
     if (!editingTask || !gameState.currentUser) return;
+    if (!canGrade) {
+      showToast('Apenas Mentor ou Master podem concluir tarefas.', 'error');
+      return;
+    }
     const { buildingId, task } = editingTask;
 
     const building = gameState.buildings.find((b) => b.id === buildingId);
@@ -235,6 +264,15 @@ export const createTaskActions = ({
 
     let totalTaskPA = Math.floor(task.size * task.complexity * task.ruleMultiplier);
 
+    if (task.ruleValue === 'NEGOTIATED') {
+      const distribution = task.customPaDistribution || {};
+      const sum = Object.values(distribution).reduce((acc, v) => acc + (v || 0), 0);
+      if (sum !== totalTaskPA) {
+        showToast('A soma do PA negociado deve ser igual ao PA total.', 'error');
+        return;
+      }
+    }
+
     if (ConclusionPAWithHistory + totalTaskPA > paLimit) {
       showToast(`Capacidade de armazenamento atingida! (${ConclusionPAWithHistory}/${paLimit} PA)`, 'error');
       return;
@@ -245,133 +283,160 @@ export const createTaskActions = ({
     const aimMultiplier = aimOption?.multiplier || 0;
 
     const participants = task.participants && task.participants.length > 0 ? task.participants : [gameState.currentUser.id];
-    const isParticipating = participants.includes(gameState.currentUser!.id);
+    const participantRewards = new Map<string, { finalPA: number; xp: number; coins: number }>();
 
-    let myBasePA = 0;
-    if (task.ruleValue === 'NEGOTIATED') {
-      myBasePA = task.customPaDistribution?.[gameState.currentUser!.id] || 0;
-    } else {
-      myBasePA = totalTaskPA;
+    for (const participantId of participants) {
+      const basePA = task.ruleValue === 'NEGOTIATED'
+        ? (task.customPaDistribution?.[participantId] || 0)
+        : totalTaskPA;
+      const finalPA = Math.floor(basePA * aimMultiplier);
+      if (finalPA <= 0) continue;
+      participantRewards.set(participantId, {
+        finalPA,
+        xp: finalPA * 10,
+        coins: finalPA
+      });
     }
 
-    const myFinalPA = Math.floor(myBasePA * aimMultiplier);
-    const myCoins = myFinalPA;
-    const myXP = myFinalPA * 10;
+    if (participantRewards.size === 0) {
+      showToast('Nenhum participante com recompensa válida para esta tarefa.', 'error');
+      return;
+    }
+
+    const totalFinalPA = Math.floor(totalTaskPA * aimMultiplier);
+    const totalFinalXP = totalFinalPA * 10;
+    const totalFinalCoins = totalFinalPA;
+    const myReward = participantRewards.get(gameState.currentUser.id);
 
     // Routine History Entry
     const historyEntry: TaskHistoryEntry = {
       timestamp: Date.now(),
       aim: aimValue,
-      xp: myXP,
-      coins: myCoins,
-      participants: [...participants],
+      xp: totalFinalXP,
+      coins: totalFinalCoins,
+      participants: Array.from(participantRewards.keys()),
       feedback: task.feedback,
       sprint: gameState.sprintCycle
     };
 
-    setGameState((prev) => {
-      let playerUpdate = { ...prev.player };
-      let resourcesUpdate = { ...prev.resources };
+    let nextPlayer = { ...gameState.player };
+    let nextResources = { ...gameState.resources };
 
-      if (isParticipating) {
-        const newTotalPA = prev.player.totalPA + myFinalPA;
-        let newXP = prev.player.currentXP + myXP;
-        let newLevel = prev.player.level;
-        let newNextLevelXP = prev.player.nextLevelXP;
+    if (myReward) {
+      const newTotalPA = gameState.player.totalPA + myReward.finalPA;
+      let newXP = gameState.player.currentXP + myReward.xp;
+      let newLevel = gameState.player.level;
+      let newNextLevelXP = gameState.player.nextLevelXP;
 
-        while (newXP >= newNextLevelXP) {
-          newXP -= newNextLevelXP;
-          newLevel++;
-          newNextLevelXP = calculateNextLevelXP(newLevel);
-        }
-        const aimToStars = aimValue === 0 ? 1 : aimValue === 1 ? 3 : aimValue === 2 ? 4 : 5;
-        const newRep = prev.player.reputation * 0.95 + aimToStars * 0.05;
-
-        playerUpdate = {
-          ...prev.player,
-          level: newLevel,
-          currentXP: newXP,
-          nextLevelXP: newNextLevelXP,
-          totalPA: newTotalPA,
-          reputation: newRep
-        };
-        resourcesUpdate = {
-          coins: prev.resources.coins + myCoins
-        };
+      while (newXP >= newNextLevelXP) {
+        newXP -= newNextLevelXP;
+        newLevel++;
+        newNextLevelXP = calculateNextLevelXP(newLevel);
       }
+      const newRep = gameState.player.reputation * 0.95 + aimValue * 0.05;
 
-      let isLimitTriggered = false;
-      let limitType: 'QUANTITY' | 'TIME' = 'QUANTITY';
-
-      return {
-        ...prev,
-        player: playerUpdate,
-        resources: resourcesUpdate,
-        buildings: prev.buildings.map((b) => {
-          if (b.id === buildingId) {
-            return {
-              ...b,
-              tasks: b.tasks.map((t) => {
-                if (t.id === task.id) {
-                  const isFixed = t.ruleValue === 'FIXED';
-
-                  // Increment count if it's a fixed task
-                  const newCount = isFixed ? (t.fixedQuantityCount || 0) + 1 : 0;
-
-                  // Check Limits
-                  let limitReached = false;
-                  if (isFixed) {
-                    // Check Quantity Limit
-                    if (t.fixedQuantityLimit && newCount >= t.fixedQuantityLimit) {
-                      limitReached = true;
-                      limitType = 'QUANTITY';
-                    }
-                    // Check Deadline Limit
-                    if (t.fixedDeadline && Date.now() >= t.fixedDeadline) {
-                      limitReached = true;
-                      limitType = 'TIME';
-                    }
-                  }
-
-                  if (limitReached) {
-                    isLimitTriggered = true;
-                    setRenewalPrompt({ buildingId, taskId: t.id, type: limitType });
-                  }
-
-                  const nextStatus: KanbanStatus = isFixed && !limitReached ? 'BACKLOG' : 'DONE';
-
-                  return {
-                    ...t,
-                    status: nextStatus,
-                    aim: aimValue,
-                    finalPA: myFinalPA,
-                    finalXP: myXP,
-                    finalCoins: myCoins,
-                    fixedQuantityCount: newCount,
-                    history: [...(t.history || []), historyEntry],
-                    // Reset ephemeral fields if routine and not yet finished permanently
-                    ...(isFixed && !limitReached
-                      ? {
-                          aim: undefined,
-                          feedback: undefined,
-                          evidenceLink: undefined,
-                          deliveryNotes: undefined,
-                          reflections: undefined,
-                          finalPA: undefined,
-                          finalXP: undefined,
-                          finalCoins: undefined
-                        }
-                      : {})
-                  };
-                }
-                return t;
-              })
-            };
-          }
-          return b;
-        })
+      nextPlayer = {
+        ...gameState.player,
+        level: newLevel,
+        currentXP: newXP,
+        nextLevelXP: newNextLevelXP,
+        totalPA: newTotalPA,
+        reputation: newRep
       };
+      nextResources = {
+        coins: gameState.resources.coins + myReward.coins
+      };
+    }
+
+    const isFixed = task.ruleValue === 'FIXED';
+    const newCount = isFixed ? (task.fixedQuantityCount || 0) + 1 : 0;
+    let limitReached = false;
+    let limitType: 'QUANTITY' | 'TIME' = 'QUANTITY';
+
+    if (isFixed) {
+      if (task.fixedQuantityLimit && newCount >= task.fixedQuantityLimit) {
+        limitReached = true;
+        limitType = 'QUANTITY';
+      }
+      if (task.fixedDeadline && Date.now() >= task.fixedDeadline) {
+        limitReached = true;
+        limitType = 'TIME';
+      }
+    }
+
+    if (limitReached) {
+      setRenewalPrompt({ buildingId, taskId: task.id, type: limitType });
+    }
+
+    const nextStatus: KanbanStatus = isFixed && !limitReached ? 'BACKLOG' : 'DONE';
+
+    const updatedTask: Partial<KanbanTask> = {
+      status: nextStatus,
+      aim: aimValue,
+      finalPA: totalFinalPA,
+      finalXP: totalFinalXP,
+      finalCoins: totalFinalCoins,
+      fixedQuantityCount: newCount,
+      history: [...(task.history || []), historyEntry]
+    };
+
+    if (isFixed && !limitReached) {
+      updatedTask.aim = undefined;
+      updatedTask.feedback = undefined;
+      updatedTask.evidenceLink = undefined;
+      updatedTask.deliveryNotes = undefined;
+      updatedTask.reflections = undefined;
+      updatedTask.finalPA = undefined;
+      updatedTask.finalXP = undefined;
+      updatedTask.finalCoins = undefined;
+    }
+
+    setGameState((prev) => ({
+      ...prev,
+      player: nextPlayer,
+      resources: nextResources,
+      buildings: prev.buildings.map((b) => {
+        if (b.id === buildingId) {
+          return {
+            ...b,
+            tasks: b.tasks.map((t) => (t.id === task.id ? { ...t, ...updatedTask } : t))
+          };
+        }
+        return b;
+      })
+    }));
+
+    const dbUpdates: Partial<KanbanTask> & Record<string, any> = {
+      ...updatedTask,
+      aim: updatedTask.aim ?? (isFixed && !limitReached ? null : aimValue),
+      finalPA: updatedTask.finalPA ?? (isFixed && !limitReached ? null : totalFinalPA),
+      finalXP: updatedTask.finalXP ?? (isFixed && !limitReached ? null : totalFinalXP),
+      finalCoins: updatedTask.finalCoins ?? (isFixed && !limitReached ? null : totalFinalCoins),
+      feedback: updatedTask.feedback ?? (isFixed && !limitReached ? null : task.feedback),
+      evidenceLink: updatedTask.evidenceLink ?? (isFixed && !limitReached ? null : task.evidenceLink),
+      deliveryNotes: updatedTask.deliveryNotes ?? (isFixed && !limitReached ? null : task.deliveryNotes),
+      reflections: updatedTask.reflections ?? (isFixed && !limitReached ? null : task.reflections)
+    };
+    void updateTaskRemote(task.id, dbUpdates as Partial<KanbanTask>).catch(() => {
+      showToast('Erro ao salvar avaliação.', 'error');
     });
+
+    const rewardsToPersist = Array.from(participantRewards.entries());
+    void Promise.all(
+      rewardsToPersist.map(async ([userId, reward]) => {
+        const { error } = await supabase.rpc('apply_participant_rewards', {
+          target_user: userId,
+          pa_delta: reward.finalPA,
+          xp_delta: reward.xp,
+          coins_delta: reward.coins,
+          aim_value: aimValue
+        });
+        if (error) throw error;
+      })
+    ).catch(() => {
+      showToast('Erro ao distribuir recompensas para todos os participantes.', 'error');
+    });
+
     setEditingTask(null);
     showToast(task.ruleValue === 'FIXED' ? 'Ciclo de rotina concluído!' : 'Avaliação concluída!', 'success');
   };
@@ -415,6 +480,21 @@ export const createTaskActions = ({
         return b;
       })
     }));
+    void updateTaskRemote(taskId, {
+      status: renew ? 'BACKLOG' : 'DONE',
+      fixedQuantityCount: renew ? 0 : undefined,
+      fixedDeadline: type === 'TIME' && renew ? Date.now() + 7 * 24 * 60 * 60 * 1000 : undefined,
+      aim: undefined,
+      feedback: undefined,
+      evidenceLink: undefined,
+      deliveryNotes: undefined,
+      reflections: undefined,
+      finalPA: undefined,
+      finalXP: undefined,
+      finalCoins: undefined
+    }).catch(() => {
+      showToast('Erro ao salvar renovação.', 'error');
+    });
 
     setRenewalPrompt(null);
     showToast(renew ? 'Tarefa renovada e movida para o Backlog!' : 'Tarefa finalizada permanentemente.', 'info');

@@ -4,8 +4,11 @@ import { FilePlus, Home, Plus, Shield } from 'lucide-react';
 interface FloatingMenuProps {
   visible: boolean;
   isMainMenuOpen: boolean;
+  isMaster: boolean;
   onToggleMainMenu: () => void;
   onCreateTask: () => void;
+  onCreateBase: () => void;
+  onCreateProject: () => void;
   onCreateSquad: () => void;
   onGoToBase: () => void;
   onGoToSquad: () => void;
@@ -14,8 +17,11 @@ interface FloatingMenuProps {
 export default function FloatingMenu({
   visible,
   isMainMenuOpen,
+  isMaster,
   onToggleMainMenu,
   onCreateTask,
+  onCreateBase,
+  onCreateProject,
   onCreateSquad,
   onGoToBase,
   onGoToSquad
@@ -43,12 +49,32 @@ export default function FloatingMenu({
             </button>
 
             <button
-              onClick={onCreateSquad}
-              className="flex items-center gap-3 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full shadow-lg transition-all animate-in slide-in-from-bottom-6 fade-in duration-300 delay-100 border border-slate-600"
+              onClick={onCreateBase}
+              className="flex items-center gap-3 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-full shadow-lg transition-all animate-in slide-in-from-bottom-4 fade-in duration-250 border border-emerald-300/30"
             >
-              <Shield size={18} />
-              <span className="font-bold text-xs uppercase">Criar Squad</span>
+              <Home size={18} />
+              <span className="font-bold text-xs uppercase">Construir Base</span>
             </button>
+
+            {isMaster && (
+              <button
+                onClick={onCreateProject}
+                className="flex items-center gap-3 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full shadow-lg transition-all animate-in slide-in-from-bottom-5 fade-in duration-260 border border-slate-600"
+              >
+                <Shield size={18} />
+                <span className="font-bold text-xs uppercase">Construir Projeto</span>
+              </button>
+            )}
+
+            {isMaster && (
+              <button
+                onClick={onCreateSquad}
+                className="flex items-center gap-3 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full shadow-lg transition-all animate-in slide-in-from-bottom-6 fade-in duration-300 delay-100 border border-slate-600"
+              >
+                <Shield size={18} />
+                <span className="font-bold text-xs uppercase">Criar Squad</span>
+              </button>
+            )}
           </div>
         )}
 
