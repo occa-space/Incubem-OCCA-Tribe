@@ -343,7 +343,7 @@ export default function OverviewTab({
             </div>
           </div>
 
-          {selectedBuilding.type === BuildingType.RESIDENTIAL && (
+          {selectedBuilding.type === BuildingType.RESIDENTIAL && gameState.currentUser?.id === selectedBuilding.ownerId && (
             <div className="bg-slate-800 p-5 rounded-xl border border-slate-700">
               <h3 className="font-bold text-white mb-3 flex items-center gap-2">
                 <MessageSquare size={16} className="text-emerald-400" /> Feedbacks Recebidos

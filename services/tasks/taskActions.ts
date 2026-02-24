@@ -1,7 +1,7 @@
 import { Dispatch, SetStateAction } from 'react';
 import { AIM_OPTIONS, BUILDING_PA_LIMITS, calculateNextLevelXP } from '../../constants';
 import { BuildingType, GameState, KanbanStatus, KanbanTask, TaskHistoryEntry } from '../../types';
-import { createTask, updateTask as updateTaskRemote } from '../supabase/repositories/tasks';
+import { createTask, deleteTask as deleteTaskRemote, updateTask as updateTaskRemote } from '../supabase/repositories/tasks';
 import { supabase } from '../supabase/client';
 
 export interface TaskActionsParams {
@@ -500,6 +500,34 @@ export const createTaskActions = ({
     showToast(renew ? 'Tarefa renovada e movida para o Backlog!' : 'Tarefa finalizada permanentemente.', 'info');
   };
 
+  const deleteTask = (buildingId: string, taskId: string) => {
+    const building = gameState.buildings.find((b) => b.id === buildingId);
+    const task = building?.tasks.find((t) => t.id === taskId);
+    if (!task) return;
+
+    const canDelete = gameState.currentUser?.role === 'Master' || task.creatorId === gameState.currentUser?.id;
+    if (!canDelete) {
+      showToast('Você não pode excluir esta tarefa.', 'error');
+      return;
+    }
+
+    setGameState((prev) => ({
+      ...prev,
+      buildings: prev.buildings.map((b) =>
+        b.id === buildingId ? { ...b, tasks: b.tasks.filter((t) => t.id !== taskId) } : b
+      )
+    }));
+
+    if (editingTask?.task.id === taskId) {
+      setEditingTask(null);
+      setIsCreatingTask(false);
+    }
+
+    void deleteTaskRemote(taskId).catch(() => {
+      showToast('Erro ao excluir tarefa.', 'error');
+    });
+  };
+
   return {
     handleOpenCreateTask,
     handleSaveNewTask,
@@ -510,6 +538,7 @@ export const createTaskActions = ({
     handleDragOver,
     handleDrop,
     confirmGrading,
-    handleRenewal
+    handleRenewal,
+    deleteTask
   };
 };

@@ -36,6 +36,25 @@ export default function KanbanTab({
   draggedTaskId,
   gameState
 }: KanbanTabProps) {
+  const getCompletionSprint = (task: KanbanTask) => {
+    if (task.history && task.history.length > 0) {
+      return task.history[task.history.length - 1].sprint;
+    }
+    if (task.sprintHistory && task.sprintHistory.length > 0) {
+      const last = task.sprintHistory[task.sprintHistory.length - 1];
+      const parsed = parseInt(last.replace('Sprint ', ''), 10);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+  };
+
+  const visibleTasks = displayTasks.filter((t) => {
+    if (t.status !== 'DONE') return true;
+    const completedSprint = getCompletionSprint(t);
+    if (!completedSprint) return true;
+    return completedSprint >= gameState.sprintCycle;
+  });
+
   return (
     <div className="flex flex-col h-full bg-slate-900 overflow-auto">
       <div className="p-4 bg-slate-800 border-b border-slate-700 flex justify-end shrink-0">
@@ -71,7 +90,7 @@ export default function KanbanTab({
 
               <div className="flex gap-4 ml-60">
                 {kanbanColumns.map((col) => {
-                  const laneTasks = displayTasks.filter((t) => t.status === col.id && t.ruleValue === lane.rule);
+                  const laneTasks = visibleTasks.filter((t) => t.status === col.id && t.ruleValue === lane.rule);
                   const lanePA = laneTasks.reduce((acc, t) => acc + calculateTaskPA(t), 0);
 
                   return (

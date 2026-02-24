@@ -7,6 +7,8 @@ interface HudProps {
   playerLevel: number;
   sprintCycle: number;
   daysRemaining: number;
+  daysElapsed: number;
+  sprintStartDate: number;
   coins: number;
   showProfileMenu: boolean;
   onToggleProfileMenu: () => void;
@@ -21,6 +23,8 @@ export default function Hud({
   playerLevel,
   sprintCycle,
   daysRemaining,
+  daysElapsed,
+  sprintStartDate,
   coins,
   showProfileMenu,
   onToggleProfileMenu,
@@ -29,6 +33,7 @@ export default function Hud({
   onResetSprint,
   onLogout
 }: HudProps) {
+  const sprintStartMs = sprintStartDate < 10_000_000_000 ? sprintStartDate * 1000 : sprintStartDate;
   return (
     <div className="absolute top-0 left-0 w-full pointer-events-none z-10 flex flex-col items-center md:block">
       <div className="w-full flex justify-between items-center p-2 md:p-0 relative">
@@ -83,12 +88,20 @@ export default function Hud({
 
         <div className="pointer-events-auto md:absolute md:top-4 md:left-1/2 md:transform md:-translate-x-1/2 z-30 flex justify-center">
           <div className="bg-slate-900/90 border-2 border-slate-600 rounded-full py-1.5 px-4 md:py-2 md:px-6 shadow-xl backdrop-blur-md flex items-center gap-3 scale-90 md:scale-100">
-              <div className="flex flex-col items-center">
-              <span className="text-[9px] md:text-[10px] font-bold text-pink-400 uppercase tracking-widest leading-none">Sprint {sprintCycle}</span>
-              <div className="flex items-center gap-2 mt-0.5">
-                <Clock size={14} className="text-slate-300 md:w-4 md:h-4" />
-                <span className="text-sm md:text-lg font-bold text-white leading-none">{daysRemaining} dias</span>
-              </div>
+            <div className="flex flex-col items-center">
+              {sprintStartMs > 0 ? (
+                <>
+                  <span className="text-[9px] md:text-[10px] font-bold text-pink-400 uppercase tracking-widest leading-none">Sprint {sprintCycle}</span>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <Clock size={14} className="text-slate-300 md:w-4 md:h-4" />
+                    <span className="text-sm md:text-lg font-bold text-white leading-none">{daysRemaining} dias</span>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-1 text-[10px] md:text-xs text-amber-300 font-bold uppercase tracking-widest">
+                  Aguardando iniciar sprint
+                </div>
+              )}
             </div>
           </div>
         </div>

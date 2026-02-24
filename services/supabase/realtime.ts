@@ -16,7 +16,7 @@ export const subscribeToGameData = ({ squadId, isMaster, onChange }: RealtimeOpt
   };
 
   channel
-    .on('postgres_changes', maybeFilter('buildings'), onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'buildings' }, onChange)
     .on('postgres_changes', maybeFilter('tasks'), onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'squads' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, onChange)

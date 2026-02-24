@@ -19,12 +19,16 @@ export const getDisplayTasks = ({
 
   if (isMyHouse) {
     const allMyTasks: DisplayTask[] = [];
+    const currentUserId = gameState.currentUser?.id;
+    if (!currentUserId) return displayTasks;
     gameState.buildings.forEach((b) => {
       if (b.type !== BuildingType.RESIDENTIAL) {
         b.tasks.forEach((t) => {
-          const isParticipant = t.participants?.includes(gameState.currentUser!.id);
-          const isCreator = t.creatorId === gameState.currentUser?.id;
-          if (isParticipant || isCreator) {
+          const participantIds = t.participants && t.participants.length > 0 ? t.participants : [t.creatorId];
+          const isParticipant = participantIds.includes(currentUserId);
+          const isAssignee = t.assigneeId === currentUserId;
+          const isCreator = t.creatorId === currentUserId;
+          if (isParticipant || isAssignee || isCreator) {
             allMyTasks.push({ ...t, originalBuildingId: b.id });
           }
         });

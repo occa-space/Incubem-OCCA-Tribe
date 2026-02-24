@@ -240,12 +240,14 @@ export default function App() {
     if (gameState.currentUser.role !== 'Master') return;
 
     const checkSprint = async () => {
-      const elapsedDays = Math.floor((Date.now() - gameState.sprintStartDate) / (1000 * 60 * 60 * 24));
+      if (gameState.sprintStartDate <= 0) return;
+      const sprintStartMs = gameState.sprintStartDate < 10_000_000_000 ? gameState.sprintStartDate * 1000 : gameState.sprintStartDate;
+      const elapsedDays = Math.floor((Date.now() - sprintStartMs) / (1000 * 60 * 60 * 24));
       if (elapsedDays < SPRINT_DURATION_DAYS) return;
 
       const cyclesPassed = Math.floor(elapsedDays / SPRINT_DURATION_DAYS);
       const nextSprintCycle = gameState.sprintCycle + cyclesPassed;
-      const nextStartDate = gameState.sprintStartDate + cyclesPassed * SPRINT_DURATION_DAYS * 24 * 60 * 60 * 1000;
+      const nextStartDate = sprintStartMs + cyclesPassed * SPRINT_DURATION_DAYS * 24 * 60 * 60 * 1000;
 
       setGameState((prev) => ({
         ...prev,
@@ -295,7 +297,7 @@ export default function App() {
     if (!isMaster) return;
     if (!window.confirm('Resetar sprint para 0? Isso reinicia o ciclo para todos.')) return;
     const nextSprintCycle = 0;
-    const nextStartDate = Date.now();
+    const nextStartDate = 0;
     setGameState((prev) => ({
       ...prev,
       sprintCycle: nextSprintCycle,
@@ -355,8 +357,11 @@ export default function App() {
   });
 
   // Calculate days remaining
-  const daysElapsed = Math.floor((Date.now() - gameState.sprintStartDate) / (1000 * 60 * 60 * 24));
-  const daysRemaining = Math.max(0, SPRINT_DURATION_DAYS - daysElapsed);
+  const sprintStartMs = gameState.sprintStartDate > 0
+    ? (gameState.sprintStartDate < 10_000_000_000 ? gameState.sprintStartDate * 1000 : gameState.sprintStartDate)
+    : 0;
+  const daysElapsed = sprintStartMs > 0 ? Math.floor((Date.now() - sprintStartMs) / (1000 * 60 * 60 * 24)) : 0;
+  const daysRemaining = sprintStartMs > 0 ? Math.max(0, SPRINT_DURATION_DAYS - daysElapsed) : 0;
 
   const displayTasks = getDisplayTasks({
       gameState,
@@ -611,6 +616,8 @@ export default function App() {
         playerLevel={gameState.player.level}
         sprintCycle={gameState.sprintCycle}
         daysRemaining={daysRemaining}
+        daysElapsed={daysElapsed}
+        sprintStartDate={gameState.sprintStartDate}
         coins={gameState.resources.coins}
         showProfileMenu={showProfileMenu}
         onToggleProfileMenu={() => setShowProfileMenu(!showProfileMenu)}
@@ -814,6 +821,7 @@ export default function App() {
           handleSaveNewTask={taskActions.handleSaveNewTask}
           confirmGrading={taskActions.confirmGrading}
           calculateTaskPA={calculateTaskPA}
+          deleteTask={taskActions.deleteTask}
           setEditingTask={setEditingTask}
           setIsCreatingTask={setIsCreatingTask}
           isMaster={isMaster}

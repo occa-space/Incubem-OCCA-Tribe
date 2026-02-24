@@ -12,6 +12,7 @@ import {
   History,
   Link as LinkIcon,
   Lock,
+  Trash2,
   Repeat,
   Users,
   X
@@ -30,6 +31,7 @@ interface TaskDetailModalProps {
   handleSaveNewTask: () => void;
   confirmGrading: () => void;
   calculateTaskPA: (task: Partial<KanbanTask>) => number;
+  deleteTask: (buildingId: string, taskId: string) => void;
   setEditingTask: (value: { buildingId: string; task: KanbanTask } | null) => void;
   setIsCreatingTask: (value: boolean) => void;
   isMaster: boolean;
@@ -46,10 +48,12 @@ export default function TaskDetailModal({
   handleSaveNewTask,
   confirmGrading,
   calculateTaskPA,
+  deleteTask,
   setEditingTask,
   setIsCreatingTask,
   isMaster
 }: TaskDetailModalProps) {
+  const canDeleteTask = !isCreatingTask && (isMaster || editingTask.task.creatorId === gameState.currentUser?.id);
   return (
     <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
       <div className="bg-slate-800 border-2 border-indigo-500/50 rounded-xl w-full max-w-4xl h-[80vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
@@ -69,7 +73,21 @@ export default function TaskDetailModal({
               )}
             </div>
           </div>
-          <button onClick={() => { setEditingTask(null); setIsCreatingTask(false); }} className="p-2 hover:bg-slate-700 rounded-full"><X /></button>
+          <div className="flex items-center gap-2">
+            {canDeleteTask && (
+              <button
+                onClick={() => {
+                  if (!window.confirm('Excluir esta tarefa? Esta ação não pode ser desfeita.')) return;
+                  deleteTask(editingTask.buildingId, editingTask.task.id);
+                }}
+                className="p-2 hover:bg-slate-700 rounded-full text-red-400"
+                title="Excluir tarefa"
+              >
+                <Trash2 />
+              </button>
+            )}
+            <button onClick={() => { setEditingTask(null); setIsCreatingTask(false); }} className="p-2 hover:bg-slate-700 rounded-full"><X /></button>
+          </div>
         </div>
 
         <div className="flex border-b border-slate-700 bg-slate-800">
